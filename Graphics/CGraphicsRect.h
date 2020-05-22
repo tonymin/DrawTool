@@ -13,12 +13,15 @@ public:
 
 	QRectF boundingRect() const override;
 
+	void setColor(const QColor c);
+
 protected:
 	void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override;
 
 private:
 	qreal m_width, m_height;
 	QPointF m_topLeft;
+	QColor m_color;
 
 };
 

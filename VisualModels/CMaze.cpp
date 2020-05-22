@@ -5,11 +5,14 @@
 #include <QPushButton>
 #include <QHBoxLayout>
 #include "CControlDlg.h"
+#include <cmath>
 
 // graphics
 #include "../Graphics/CGraphicsRect.h"
 #include "../Graphics/CGraphicsText.h"
 #include "../Graphics/CGraphicsLine.h"
+
+#include <QThread>
 
 
 
@@ -70,6 +73,7 @@ void CMaze::draw()
 			} else {
 				// text
 				auto* text = new CGraphicsText(grid[row][col]);
+				text->setZValue(2); // we want to paint text on top of everything
 				m_scene->addItem(text);
 				int xPos = (col + offset) * KCanvasGridSpace;
 				int yPos = (row + offset) * KCanvasGridSpace;
@@ -80,10 +84,10 @@ void CMaze::draw()
 					m_startPosition.xCoord = col;
 					m_startPosition.yCoord = row;
 					m_marker = text;
-				} else if (grid[row][col].compare("s", Qt::CaseInsensitive) == 0) {
+				} else {
 					// goal positions
 					CCoord goal(col, row);
-					m_goalPositions.push_back(goal);
+					m_goalPositions.insert(goal);
 				}
 			}
 		}
@@ -115,6 +119,16 @@ void CMaze::draw()
 	m_scene->addItem(right);
 
 	
+}
+
+void CMaze::markPosition(const CCoord p, QColor color)
+{
+	auto* rect = new CGraphicsRect();
+	rect->setColor(color);
+	m_scene->addItem(rect);
+	int xPos = (p.xCoord + offset) * KCanvasGridSpace;
+	int yPos = (p.yCoord + offset) * KCanvasGridSpace;
+	rect->setPos(xPos, yPos);
 }
 
 bool CMaze::validateMove(const CCoord from, const CCoord to) const
@@ -179,14 +193,356 @@ void CMaze::moveRight()
 	}
 }
 
+void CMaze::BFS()
+{
+	// FIFO open list
+	std::list<CCoord> openList;
+	std::set<CCoord> openSet; // for checking repeated nodes
+
+	// closed set
+	std::set<CCoord> closedSet; // unordered, used for checking reptitions
+	std::list<CCoord> closedList; // ordered, used for output
+
+	openList.push_back(m_startPosition);
+	openSet.insert(m_startPosition);
+	bool found = false;
+	CCoord goalNode(-1,-1);
+	while (!openList.empty()) {
+
+		// expand first node. Remove from open list/set, update closed list/set
+		auto expand = openList.front();
+		openList.pop_front();
+		openSet.erase(openSet.find(expand)); // note: This line will crash if openList is out of sync with openSet
+		closedList.push_back(expand);
+		closedSet.insert(expand);
+		
+		markPosition(expand, Qt::yellow);
+		qApp->processEvents();
+		QThread::msleep(20);
+
+		// check goal state
+		if (m_goalPositions.find(expand) != m_goalPositions.end()) {
+			// found goal
+			found = true;
+			goalNode = expand;
+			break;
+		}
+
+		// generate children and add to list. Branching factor = 4
+		int x = expand.xCoord;
+		int y = expand.yCoord;
+
+		CCoord top(x, y - 1); // (y-axis grows downwards in Qt cartesian system)
+		top.setParent(x, y);
+		// add children if not repeated, and move is valid
+		if (closedSet.find(top) == closedSet.end() &&
+			openSet.find(top) == openSet.end() &&
+			validateMove(expand, top)) {
+			openList.push_back(top);
+			openSet.insert(top);
+		}
+
+		CCoord down(x, y + 1);
+		down.setParent(x, y);
+		if (closedSet.find(down) == closedSet.end() &&
+			openSet.find(down) == openSet.end() &&
+			validateMove(expand, down)) {
+			openList.push_back(down);
+			openSet.insert(down);
+		}
+
+		CCoord left(x-1, y);
+		left.setParent(x, y);
+		if (closedSet.find(left) == closedSet.end() &&
+			openSet.find(left) == openSet.end() &&
+			validateMove(expand, left)) {
+			openList.push_back(left);
+			openSet.insert(left);
+		}
+
+		CCoord right(x+1, y);
+		right.setParent(x, y);
+		if (closedSet.find(right) == closedSet.end() &&
+			openSet.find(right) == openSet.end() &&
+			validateMove(expand, right)) {
+			openList.push_back(right);
+			openSet.insert(right);
+		}
+
+	}
+
+	if (found) {
+		QMessageBox::information(nullptr, "Result", "Found goal!");
+		//back track
+		auto current = goalNode;
+		while (current != m_startPosition) {
+			markPosition(current, Qt::green);
+			CCoord parent(current.parentX, current.parentY);
+			auto parentIt = closedSet.find(parent);
+			if (parentIt != closedSet.end()) {
+				current = *parentIt;
+			} else {
+				// eh, bug!
+				QMessageBox::information(nullptr, "Back-track", "Bugged out!");
+				break;
+			}
+		}
+		markPosition(m_startPosition, Qt::green);
+
+	} else {
+		QMessageBox::information(nullptr, "Result", "Did not find goal...");
+	}
+
+}
+
+void CMaze::DFS()
+{
+	// LIFO open list
+	std::list<CCoord> openList;
+	std::set<CCoord> openSet; // for checking repeated nodes
+
+	// closed set
+	std::set<CCoord> closedSet; // unordered, used for checking reptitions
+	std::list<CCoord> closedList; // ordered, used for output
+
+	openList.push_back(m_startPosition);
+	openSet.insert(m_startPosition);
+	bool found = false;
+	CCoord goalNode(-1, -1);
+	while (!openList.empty()) {
+
+		// expand first node. Remove from open list/set, update closed list/set
+		auto expand = openList.back(); // NOTE: back instead of front
+		openList.pop_back(); // NOTE: pop_back instead of pop_front
+		openSet.erase(openSet.find(expand)); // note: This line will crash if openList is out of sync with openSet
+		closedList.push_back(expand);
+		closedSet.insert(expand);
+
+		// visuals
+		markPosition(expand, Qt::yellow);
+		qApp->processEvents();
+		QThread::msleep(20);
+
+		// check goal state
+		if (m_goalPositions.find(expand) != m_goalPositions.end()) {
+			// found goal
+			found = true;
+			goalNode = expand;
+			break;
+		}
+
+		// generate children and add to list. Branching factor = 4
+		int x = expand.xCoord;
+		int y = expand.yCoord;
+
+		CCoord top(x, y - 1); // (y-axis grows downwards in Qt cartesian system)
+		top.setParent(x, y);
+		// add children if not repeated, and move is valid
+		if (closedSet.find(top) == closedSet.end() &&
+			openSet.find(top) == openSet.end() &&
+			validateMove(expand, top)) {
+			openList.push_back(top);
+			openSet.insert(top);
+		}
+
+		CCoord down(x, y + 1);
+		down.setParent(x, y);
+		if (closedSet.find(down) == closedSet.end() &&
+			openSet.find(down) == openSet.end() &&
+			validateMove(expand, down)) {
+			openList.push_back(down);
+			openSet.insert(down);
+		}
+
+		CCoord left(x - 1, y);
+		left.setParent(x, y);
+		if (closedSet.find(left) == closedSet.end() &&
+			openSet.find(left) == openSet.end() &&
+			validateMove(expand, left)) {
+			openList.push_back(left);
+			openSet.insert(left);
+		}
+
+		CCoord right(x + 1, y);
+		right.setParent(x, y);
+		if (closedSet.find(right) == closedSet.end() &&
+			openSet.find(right) == openSet.end() &&
+			validateMove(expand, right)) {
+			openList.push_back(right);
+			openSet.insert(right);
+		}
+
+	}
+
+	if (found) {
+		QMessageBox::information(nullptr, "Result", "Found goal!");
+		//back track
+		auto current = goalNode;
+		while (current != m_startPosition) {
+			markPosition(current, Qt::green);
+			CCoord parent(current.parentX, current.parentY);
+			auto parentIt = closedSet.find(parent);
+			if (parentIt != closedSet.end()) {
+				current = *parentIt;
+			} else {
+				// eh, bug!
+				QMessageBox::information(nullptr, "Back-track", "Bugged out!");
+				break;
+			}
+		}
+		markPosition(m_startPosition, Qt::green);
+
+	} else {
+		QMessageBox::information(nullptr, "Result", "Did not find goal...");
+	}
+}
+
+
+int CMaze::h(CCoord n, CCoord target)
+{
+	// function that represent distance to target (not direct, but sum of x and y distance)
+	int xDist = std::abs(target.xCoord - n.xCoord);
+	int yDist = std::abs(target.yCoord - n.yCoord);
+	return xDist + yDist;
+}
+
+void CMaze::AS()
+{
+	// open list/set
+	std::list<CCoord> openList;
+	std::set<CCoord> openSet; // for checking repeated nodes
+
+	// closed list/set
+	std::set<CCoord> closedSet; // unordered, used for checking reptitions
+	std::list<CCoord> closedList; // ordered, used for output
+
+	openList.push_back(m_startPosition);
+	openSet.insert(m_startPosition);
+	bool found = false;
+	CCoord goalNode(-1, -1);
+	while (!openList.empty()) {
+
+		// expand first node. Remove from open list/set, update closed list/set
+		auto expand = openList.front();
+		openList.pop_front();
+		openSet.erase(openSet.find(expand)); // note: This line will crash if openList is out of sync with openSet
+		closedList.push_back(expand);
+		closedSet.insert(expand);
+
+		// visuals
+		markPosition(expand, Qt::yellow);
+		qApp->processEvents();
+		QThread::msleep(20);
+
+		// check goal state
+		if (m_goalPositions.find(expand) != m_goalPositions.end()) {
+			// found goal
+			found = true;
+			goalNode = expand;
+			break;
+		}
+
+		// generate children and add to list. Branching factor = 4
+		int x = expand.xCoord;
+		int y = expand.yCoord;
+		int cost = expand.gn++; // cost to travel to neighbouring nodes
+		CCoord targetNode = *m_goalPositions.begin(); // assuming graph has a goal
+
+		CCoord top(x, y - 1); // (y-axis grows downwards in Qt cartesian system)
+		top.setParent(x, y);
+		top.gn = cost;
+		top.hn = h(top, targetNode);
+		// add children if not repeated, and move is valid
+		if (closedSet.find(top) == closedSet.end() &&
+			openSet.find(top) == openSet.end() &&
+			validateMove(expand, top)) {
+			openList.push_back(top);
+			openSet.insert(top);
+		}
+
+		CCoord down(x, y + 1);
+		down.setParent(x, y);
+		down.gn = cost;
+		down.hn = h(down, targetNode);
+		if (closedSet.find(down) == closedSet.end() &&
+			openSet.find(down) == openSet.end() &&
+			validateMove(expand, down)) {
+			openList.push_back(down);
+			openSet.insert(down);
+		}
+
+		CCoord left(x - 1, y);
+		left.setParent(x, y);
+		left.gn = cost;
+		left.hn = h(left, targetNode);
+		if (closedSet.find(left) == closedSet.end() &&
+			openSet.find(left) == openSet.end() &&
+			validateMove(expand, left)) {
+			openList.push_back(left);
+			openSet.insert(left);
+		}
+
+		CCoord right(x + 1, y);
+		right.setParent(x, y);
+		right.gn = cost;
+		right.hn = h(right, targetNode);
+		if (closedSet.find(right) == closedSet.end() &&
+			openSet.find(right) == openSet.end() &&
+			validateMove(expand, right)) {
+			openList.push_back(right);
+			openSet.insert(right);
+		}
+
+		// sort frontier list by increase value of gn + hn
+
+		openList.sort([](const CCoord& A, const CCoord& B) {
+			return (A.gn + A.hn) < (B.gn + B.hn);
+			});
+		/*
+		std::sort(openList.begin(), openList.end(), [](const CCoord& A, const CCoord& B) {
+			return (A.gn + A.hn) < (B.gn + B.hn);
+		});*/
+
+	}
+
+	if (found) {
+		QMessageBox::information(nullptr, "Result", "Found goal!");
+		//back track
+		auto current = goalNode;
+		while (current != m_startPosition) {
+			markPosition(current, Qt::green);
+			CCoord parent(current.parentX, current.parentY);
+			auto parentIt = closedSet.find(parent);
+			if (parentIt != closedSet.end()) {
+				current = *parentIt;
+			} else {
+				// eh, bug!
+				QMessageBox::information(nullptr, "Back-track", "Bugged out!");
+				break;
+			}
+		}
+		markPosition(m_startPosition, Qt::green);
+
+	} else {
+		QMessageBox::information(nullptr, "Result", "Did not find goal...");
+	}
+}
+
 void CMaze::run()
 {
+	//BFS();
+	//DFS();
+	AS();
+
+
 	// just for debug
+	/*
 	CControlDlg dlg;
 	connect(&dlg, &CControlDlg::moveUp, this, &CMaze::moveUp);
 	connect(&dlg, &CControlDlg::moveDown, this, &CMaze::moveDown);
 	connect(&dlg, &CControlDlg::moveLeft, this, &CMaze::moveLeft);
 	connect(&dlg, &CControlDlg::moveRight, this, &CMaze::moveRight);
 	dlg.exec();
+	*/
 
 }
